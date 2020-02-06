@@ -138,7 +138,7 @@ func (d *namespacedResourcesDeleter) Delete(nsName string) error {
 	}
 
 	// we have removed content, so mark it finalized by us
-	namespace, err = d.retryOnConflictError(namespace, d.finalizeNamespace)
+	_, err = d.retryOnConflictError(namespace, d.finalizeNamespace)
 	if err != nil {
 		// in normal practice, this should not be possible, but if a deployment is running
 		// two controllers to do namespace deletion that share a common finalizer token it's
@@ -162,7 +162,7 @@ func (d *namespacedResourcesDeleter) initOpCache() {
 	if len(resources) == 0 {
 		klog.Fatalf("Unable to get any supported resources from server: %v", err)
 	}
-	deletableGroupVersionResources := []schema.GroupVersionResource{}
+
 	for _, rl := range resources {
 		gv, err := schema.ParseGroupVersion(rl.GroupVersion)
 		if err != nil {
@@ -183,23 +183,8 @@ func (d *namespacedResourcesDeleter) initOpCache() {
 					d.opCache.setNotSupported(operationKey{operation: op, gvr: gvr})
 				}
 			}
-			deletableGroupVersionResources = append(deletableGroupVersionResources, gvr)
 		}
 	}
-}
-
-// Deletes the given namespace.
-func (d *namespacedResourcesDeleter) deleteNamespace(namespace *v1.Namespace) error {
-	var opts *metav1.DeleteOptions
-	uid := namespace.UID
-	if len(uid) > 0 {
-		opts = &metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &uid}}
-	}
-	err := d.nsClient.Delete(namespace.Name, opts)
-	if err != nil && !errors.IsNotFound(err) {
-		return err
-	}
-	return nil
 }
 
 // ResourcesRemainingError is used to inform the caller that all resources are not yet fully removed from the namespace.

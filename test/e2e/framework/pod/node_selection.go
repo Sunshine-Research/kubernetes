@@ -28,8 +28,8 @@ type NodeSelection struct {
 	Affinity *v1.Affinity
 }
 
-// SetNodeAffinityRequirement sets affinity with specified operator to nodeName to nodeSelection
-func SetNodeAffinityRequirement(nodeSelection *NodeSelection, operator v1.NodeSelectorOperator, nodeName string) {
+// setNodeAffinityRequirement sets affinity with specified operator to nodeName to nodeSelection
+func setNodeAffinityRequirement(nodeSelection *NodeSelection, operator v1.NodeSelectorOperator, nodeName string) {
 	// Add node-anti-affinity.
 	if nodeSelection.Affinity == nil {
 		nodeSelection.Affinity = &v1.Affinity{}
@@ -48,12 +48,34 @@ func SetNodeAffinityRequirement(nodeSelection *NodeSelection, operator v1.NodeSe
 		})
 }
 
+// SetNodeAffinityTopologyRequirement sets node affinity to a specified topology
+func SetNodeAffinityTopologyRequirement(nodeSelection *NodeSelection, topology map[string]string) {
+	if nodeSelection.Affinity == nil {
+		nodeSelection.Affinity = &v1.Affinity{}
+	}
+	if nodeSelection.Affinity.NodeAffinity == nil {
+		nodeSelection.Affinity.NodeAffinity = &v1.NodeAffinity{}
+	}
+	if nodeSelection.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution == nil {
+		nodeSelection.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution = &v1.NodeSelector{}
+	}
+	for k, v := range topology {
+		nodeSelection.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms = append(nodeSelection.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms,
+			v1.NodeSelectorTerm{
+				MatchExpressions: []v1.NodeSelectorRequirement{
+					{Key: k, Operator: v1.NodeSelectorOpIn, Values: []string{v}},
+				},
+			})
+
+	}
+}
+
 // SetAffinity sets affinity to nodeName to nodeSelection
 func SetAffinity(nodeSelection *NodeSelection, nodeName string) {
-	SetNodeAffinityRequirement(nodeSelection, v1.NodeSelectorOpIn, nodeName)
+	setNodeAffinityRequirement(nodeSelection, v1.NodeSelectorOpIn, nodeName)
 }
 
 // SetAntiAffinity sets anti-affinity to nodeName to nodeSelection
 func SetAntiAffinity(nodeSelection *NodeSelection, nodeName string) {
-	SetNodeAffinityRequirement(nodeSelection, v1.NodeSelectorOpNotIn, nodeName)
+	setNodeAffinityRequirement(nodeSelection, v1.NodeSelectorOpNotIn, nodeName)
 }

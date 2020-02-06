@@ -23,21 +23,15 @@ import (
 )
 
 type SelfSubjectRulesReviewExpansion interface {
-	Create(srr *authorizationapi.SelfSubjectRulesReview) (result *authorizationapi.SelfSubjectRulesReview, err error)
 	CreateContext(ctx context.Context, srr *authorizationapi.SelfSubjectRulesReview) (result *authorizationapi.SelfSubjectRulesReview, err error)
-}
-
-func (c *selfSubjectRulesReviews) Create(srr *authorizationapi.SelfSubjectRulesReview) (result *authorizationapi.SelfSubjectRulesReview, err error) {
-	return c.CreateContext(context.Background(), srr)
 }
 
 func (c *selfSubjectRulesReviews) CreateContext(ctx context.Context, srr *authorizationapi.SelfSubjectRulesReview) (result *authorizationapi.SelfSubjectRulesReview, err error) {
 	result = &authorizationapi.SelfSubjectRulesReview{}
 	err = c.client.Post().
-		Context(ctx).
 		Resource("selfsubjectrulesreviews").
 		Body(srr).
-		Do().
+		Do(ctx).
 		Into(result)
 	return
 }

@@ -30,6 +30,8 @@ const (
 	NamespaceAll string = ""
 	// NamespaceNodeLease is the namespace where we place node lease objects (used for node heartbeats)
 	NamespaceNodeLease string = "kube-node-lease"
+	// TopologyKeyAny is the service topology key that matches any node
+	TopologyKeyAny string = "*"
 )
 
 // Volume represents a named volume in a pod that may be accessed by any container in the pod.
@@ -1846,7 +1848,7 @@ type EnvVar struct {
 // EnvVarSource represents a source for the value of an EnvVar.
 type EnvVarSource struct {
 	// Selects a field of the pod: supports metadata.name, metadata.namespace, metadata.labels, metadata.annotations,
-	// spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP.
+	// spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podIPs.
 	// +optional
 	FieldRef *ObjectFieldSelector `json:"fieldRef,omitempty" protobuf:"bytes,1,opt,name=fieldRef"`
 	// Selects a resource of the container: only resources limits and requests
@@ -2201,7 +2203,7 @@ type Container struct {
 	// This can be used to provide different probe parameters at the beginning of a Pod's lifecycle,
 	// when it might take a long time to load data or warm a cache, than during steady-state operation.
 	// This cannot be updated.
-	// This is an alpha feature enabled by the StartupProbe feature flag.
+	// This is a beta feature enabled by the StartupProbe feature flag.
 	// More info: https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle#container-probes
 	// +optional
 	StartupProbe *Probe `json:"startupProbe,omitempty" protobuf:"bytes,22,opt,name=startupProbe"`
@@ -2940,7 +2942,6 @@ type PodSpec struct {
 	// in the same pod, and the first process in each container will not be assigned PID 1.
 	// HostPID and ShareProcessNamespace cannot both be set.
 	// Optional: Default to false.
-	// This field is beta-level and may be disabled with the PodShareProcessNamespace feature.
 	// +k8s:conversion-gen=false
 	// +optional
 	ShareProcessNamespace *bool `json:"shareProcessNamespace,omitempty" protobuf:"varint,27,opt,name=shareProcessNamespace"`
@@ -3827,6 +3828,8 @@ const (
 	IPv4Protocol IPFamily = "IPv4"
 	// IPv6Protocol indicates that this IP is IPv6 protocol
 	IPv6Protocol IPFamily = "IPv6"
+	// MaxServiceTopologyKeys is the largest number of topology keys allowed on a service
+	MaxServiceTopologyKeys = 16
 )
 
 // ServiceSpec describes the attributes that a user creates on a service.
@@ -3941,6 +3944,7 @@ type ServiceSpec struct {
 	// of peer discovery.
 	// +optional
 	PublishNotReadyAddresses bool `json:"publishNotReadyAddresses,omitempty" protobuf:"varint,13,opt,name=publishNotReadyAddresses"`
+
 	// sessionAffinityConfig contains the configurations of session affinity.
 	// +optional
 	SessionAffinityConfig *SessionAffinityConfig `json:"sessionAffinityConfig,omitempty" protobuf:"bytes,14,opt,name=sessionAffinityConfig"`
@@ -3954,6 +3958,21 @@ type ServiceSpec struct {
 	// cluster (e.g. IPv6 in IPv4 only cluster) is an error condition and will fail during clusterIP assignment.
 	// +optional
 	IPFamily *IPFamily `json:"ipFamily,omitempty" protobuf:"bytes,15,opt,name=ipFamily,Configcasttype=IPFamily"`
+
+	// topologyKeys is a preference-order list of topology keys which
+	// implementations of services should use to preferentially sort endpoints
+	// when accessing this Service, it can not be used at the same time as
+	// externalTrafficPolicy=Local.
+	// Topology keys must be valid label keys and at most 16 keys may be specified.
+	// Endpoints are chosen based on the first topology key with available backends.
+	// If this field is specified and all entries have no backends that match
+	// the topology of the client, the service has no backends for that client
+	// and connections should fail.
+	// The special value "*" may be used to mean "any topology". This catch-all
+	// value, if used, only makes sense as the last value in the list.
+	// If this is not specified or empty, no topology constraints will be applied.
+	// +optional
+	TopologyKeys []string `json:"topologyKeys,omitempty" protobuf:"bytes,16,opt,name=topologyKeys"`
 }
 
 // ServicePort contains information on service's port.
@@ -4042,6 +4061,7 @@ type ServiceList struct {
 }
 
 // +genclient
+// +genclient:method=CreateToken,verb=create,subresource=token,input=k8s.io/api/authentication/v1.TokenRequest,result=k8s.io/api/authentication/v1.TokenRequest
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 // ServiceAccount binds together:
@@ -4659,6 +4679,12 @@ const (
 	NamespaceTerminating NamespacePhase = "Terminating"
 )
 
+const (
+	// NamespaceTerminatingCause is returned as a defaults.cause item when a change is
+	// forbidden due to the namespace being terminated.
+	NamespaceTerminatingCause metav1.CauseType = "NamespaceTerminating"
+)
+
 type NamespaceConditionType string
 
 // These are valid conditions of a namespace.
@@ -4768,6 +4794,7 @@ type Preconditions struct {
 	UID *types.UID `json:"uid,omitempty" protobuf:"bytes,1,opt,name=uid,casttype=k8s.io/apimachinery/pkg/types.UID"`
 }
 
+// +k8s:conversion-gen:explicit-from=net/url.Values
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 // PodLogOptions is the query options for a Pod's logs REST call.
@@ -4808,8 +4835,18 @@ type PodLogOptions struct {
 	// slightly more or slightly less than the specified limit.
 	// +optional
 	LimitBytes *int64 `json:"limitBytes,omitempty" protobuf:"varint,8,opt,name=limitBytes"`
+
+	// insecureSkipTLSVerifyBackend indicates that the apiserver should not confirm the validity of the
+	// serving certificate of the backend it is connecting to.  This will make the HTTPS connection between the apiserver
+	// and the backend insecure. This means the apiserver cannot verify the log data it is receiving came from the real
+	// kubelet.  If the kubelet is configured to verify the apiserver's TLS credentials, it does not mean the
+	// connection to the real kubelet is vulnerable to a man in the middle attack (e.g. an attacker could not intercept
+	// the actual log data coming from the real kubelet).
+	// +optional
+	InsecureSkipTLSVerifyBackend bool `json:"insecureSkipTLSVerifyBackend,omitempty" protobuf:"varint,9,opt,name=insecureSkipTLSVerifyBackend"`
 }
 
+// +k8s:conversion-gen:explicit-from=net/url.Values
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 // PodAttachOptions is the query options to a Pod's remote attach call.
@@ -4847,6 +4884,7 @@ type PodAttachOptions struct {
 	Container string `json:"container,omitempty" protobuf:"bytes,5,opt,name=container"`
 }
 
+// +k8s:conversion-gen:explicit-from=net/url.Values
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 // PodExecOptions is the query options to a Pod's remote exec call.
@@ -4885,6 +4923,7 @@ type PodExecOptions struct {
 	Command []string `json:"command" protobuf:"bytes,6,rep,name=command"`
 }
 
+// +k8s:conversion-gen:explicit-from=net/url.Values
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 // PodPortForwardOptions is the query options to a Pod's port forward call
@@ -4902,6 +4941,7 @@ type PodPortForwardOptions struct {
 	Ports []int32 `json:"ports,omitempty" protobuf:"varint,1,rep,name=ports"`
 }
 
+// +k8s:conversion-gen:explicit-from=net/url.Values
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 // PodProxyOptions is the query options to a Pod's proxy call.
@@ -4913,6 +4953,7 @@ type PodProxyOptions struct {
 	Path string `json:"path,omitempty" protobuf:"bytes,1,opt,name=path"`
 }
 
+// +k8s:conversion-gen:explicit-from=net/url.Values
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 // NodeProxyOptions is the query options to a Node's proxy call.
@@ -4924,6 +4965,7 @@ type NodeProxyOptions struct {
 	Path string `json:"path,omitempty" protobuf:"bytes,1,opt,name=path"`
 }
 
+// +k8s:conversion-gen:explicit-from=net/url.Values
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 // ServiceProxyOptions is the query options to a Service's proxy call.
@@ -4940,6 +4982,20 @@ type ServiceProxyOptions struct {
 }
 
 // ObjectReference contains enough information to let you inspect or modify the referred object.
+// ---
+// New uses of this type are discouraged because of difficulty describing its usage when embedded in APIs.
+//  1. Ignored fields.  It includes many fields which are not generally honored.  For instance, ResourceVersion and FieldPath are both very rarely valid in actual usage.
+//  2. Invalid usage help.  It is impossible to add specific help for individual usage.  In most embedded usages, there are particular
+//     restrictions like, "must refer only to types A and B" or "UID not honored" or "name must be restricted".
+//     Those cannot be well described when embedded.
+//  3. Inconsistent validation.  Because the usages are different, the validation rules are different by usage, which makes it hard for users to predict what will happen.
+//  4. The fields are both imprecise and overly precise.  Kind is not a precise mapping to a URL. This can produce ambiguity
+//     during interpretation and require a REST mapping.  In most cases, the dependency is on the group,resource tuple
+//     and the version of the actual struct is irrelevant.
+//  5. We cannot easily change it.  Because this type is embedded in many locations, updates to this type
+//     will affect numerous schemas.  Don't make new APIs embed an underspecified API type they do not control.
+// Instead of using this type, create a locally provided and used type that is well-focused on your reference.
+// For example, ServiceReferences for admission registration: https://github.com/kubernetes/api/blob/release-1.17/admissionregistration/v1/types.go#L533 .
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 type ObjectReference struct {
 	// Kind of the referent.
@@ -5383,6 +5439,14 @@ type Secret struct {
 	// +optional
 	metav1.ObjectMeta `json:"metadata,omitempty" protobuf:"bytes,1,opt,name=metadata"`
 
+	// Immutable, if set to true, ensures that data stored in the Secret cannot
+	// be updated (only object metadata can be modified).
+	// If not set to true, the field can be modified at any time.
+	// Defaulted to nil.
+	// This is an alpha field enabled by ImmutableEphemeralVolumes feature gate.
+	// +optional
+	Immutable *bool `json:"immutable,omitempty" protobuf:"varint,5,opt,name=immutable"`
+
 	// Data contains the secret data. Each key must consist of alphanumeric
 	// characters, '-', '_' or '.'. The serialized form of the secret data is a
 	// base64 encoded string, representing the arbitrary (possibly non-string)
@@ -5515,6 +5579,14 @@ type ConfigMap struct {
 	// More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
 	// +optional
 	metav1.ObjectMeta `json:"metadata,omitempty" protobuf:"bytes,1,opt,name=metadata"`
+
+	// Immutable, if set to true, ensures that data stored in the ConfigMap cannot
+	// be updated (only object metadata can be modified).
+	// If not set to true, the field can be modified at any time.
+	// Defaulted to nil.
+	// This is an alpha field enabled by ImmutableEphemeralVolumes feature gate.
+	// +optional
+	Immutable *bool `json:"immutable,omitempty" protobuf:"varint,4,opt,name=immutable"`
 
 	// Data contains the configuration data.
 	// Each key must consist of alphanumeric characters, '-', '_' or '.'.
@@ -5767,7 +5839,7 @@ type WindowsSecurityContextOptions struct {
 	// Defaults to the user specified in image metadata if unspecified.
 	// May also be set in PodSecurityContext. If set in both SecurityContext and
 	// PodSecurityContext, the value specified in SecurityContext takes precedence.
-	// This field is alpha-level and it is only honored by servers that enable the WindowsRunAsUserName feature flag.
+	// This field is beta-level and may be disabled with the WindowsRunAsUserName feature flag.
 	// +optional
 	RunAsUserName *string `json:"runAsUserName,omitempty" protobuf:"bytes,3,opt,name=runAsUserName"`
 }

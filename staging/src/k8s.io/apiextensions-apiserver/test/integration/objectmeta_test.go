@@ -23,8 +23,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coreos/etcd/clientv3"
-	"github.com/coreos/etcd/pkg/transport"
+	"go.etcd.io/etcd/clientv3"
+	"go.etcd.io/etcd/pkg/transport"
 	"google.golang.org/grpc"
 	"sigs.k8s.io/yaml"
 
@@ -32,7 +32,6 @@ import (
 	apiextensionsv1beta1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
 	"k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	serveroptions "k8s.io/apiextensions-apiserver/pkg/cmd/server/options"
-	"k8s.io/apiextensions-apiserver/pkg/features"
 	"k8s.io/apiextensions-apiserver/test/integration/fixtures"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -41,9 +40,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/diff"
 	"k8s.io/apimachinery/pkg/util/json"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
-	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/dynamic"
-	featuregatetesting "k8s.io/component-base/featuregate/testing"
 	"k8s.io/utils/pointer"
 )
 
@@ -140,9 +137,9 @@ func TestInvalidObjectMetaInStorage(t *testing.T) {
 		t.Fatal(err)
 	}
 	tlsInfo := transport.TLSInfo{
-		CertFile: restOptions.StorageConfig.Transport.CertFile,
-		KeyFile:  restOptions.StorageConfig.Transport.KeyFile,
-		CAFile:   restOptions.StorageConfig.Transport.CAFile,
+		CertFile:      restOptions.StorageConfig.Transport.CertFile,
+		KeyFile:       restOptions.StorageConfig.Transport.KeyFile,
+		TrustedCAFile: restOptions.StorageConfig.Transport.TrustedCAFile,
 	}
 	tlsConfig, err := tlsInfo.ClientConfig()
 	if err != nil {
@@ -431,8 +428,6 @@ invalidDefaults: {}
 )
 
 func TestEmbeddedResources(t *testing.T) {
-	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.CustomResourceDefaulting, true)()
-
 	tearDownFn, apiExtensionClient, dynamicClient, err := fixtures.StartDefaultServerWithClients(t)
 	if err != nil {
 		t.Fatal(err)

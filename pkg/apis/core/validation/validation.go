@@ -2097,7 +2097,10 @@ var validEnvDownwardAPIFieldPathExpressions = sets.NewString(
 	"spec.nodeName",
 	"spec.serviceAccountName",
 	"status.hostIP",
-	"status.podIP")
+	"status.podIP",
+	// status.podIPs is populated even if IPv6DualStack feature gate
+	// is not enabled. This will work for single stack and dual stack.
+	"status.podIPs")
 var validContainerResourceFieldPathExpressions = sets.NewString("limits.cpu", "limits.memory", "limits.ephemeral-storage", "requests.cpu", "requests.memory", "requests.ephemeral-storage")
 
 func validateEnvVarValueFrom(ev core.EnvVar, fldPath *field.Path) field.ErrorList {
@@ -4053,6 +4056,35 @@ func ValidateService(service *core.Service) field.ErrorList {
 		ports[key] = true
 	}
 
+	// Validate TopologyKeys
+	if len(service.Spec.TopologyKeys) > 0 {
+		topoPath := specPath.Child("topologyKeys")
+		// topologyKeys is mutually exclusive with 'externalTrafficPolicy=Local'
+		if service.Spec.ExternalTrafficPolicy == core.ServiceExternalTrafficPolicyTypeLocal {
+			allErrs = append(allErrs, field.Forbidden(topoPath, "may not be specified when `externalTrafficPolicy=Local`"))
+		}
+		if len(service.Spec.TopologyKeys) > core.MaxServiceTopologyKeys {
+			allErrs = append(allErrs, field.TooMany(topoPath, len(service.Spec.TopologyKeys), core.MaxServiceTopologyKeys))
+		}
+		topoKeys := sets.NewString()
+		for i, key := range service.Spec.TopologyKeys {
+			keyPath := topoPath.Index(i)
+			if topoKeys.Has(key) {
+				allErrs = append(allErrs, field.Duplicate(keyPath, key))
+			}
+			topoKeys.Insert(key)
+			// "Any" must be the last value specified
+			if key == v1.TopologyKeyAny && i != len(service.Spec.TopologyKeys)-1 {
+				allErrs = append(allErrs, field.Invalid(keyPath, key, `"*" must be the last value specified`))
+			}
+			if key != v1.TopologyKeyAny {
+				for _, msg := range validation.IsQualifiedName(key) {
+					allErrs = append(allErrs, field.Invalid(keyPath, service.Spec.TopologyKeys, msg))
+				}
+			}
+		}
+	}
+
 	// Validate SourceRange field and annotation
 	_, ok := service.Annotations[core.AnnotationLoadBalancerSourceRangesKey]
 	if len(service.Spec.LoadBalancerSourceRanges) > 0 || ok {
@@ -4143,6 +4175,7 @@ func validateServiceExternalTrafficFieldsValue(service *core.Service) field.Erro
 		allErrs = append(allErrs, field.Invalid(field.NewPath("spec").Child("externalTrafficPolicy"), service.Spec.ExternalTrafficPolicy,
 			fmt.Sprintf("ExternalTrafficPolicy must be empty, %v or %v", core.ServiceExternalTrafficPolicyTypeCluster, core.ServiceExternalTrafficPolicyTypeLocal)))
 	}
+
 	if service.Spec.HealthCheckNodePort < 0 {
 		allErrs = append(allErrs, field.Invalid(field.NewPath("spec").Child("healthCheckNodePort"), service.Spec.HealthCheckNodePort,
 			"HealthCheckNodePort must be not less than 0"))
@@ -4391,8 +4424,15 @@ func ValidateNodeSpecificAnnotations(annotations map[string]string, fldPath *fie
 	return allErrs
 }
 
+// NodeValidationOptions contains the different settings for node validation
+type NodeValidationOptions struct {
+	// Should node a spec containing more than one huge page resource (with different sizes)
+	// with pre-allocated memory trigger validation errors
+	ValidateSingleHugePageResource bool
+}
+
 // ValidateNode tests if required fields in the node are set.
-func ValidateNode(node *core.Node) field.ErrorList {
+func ValidateNode(node *core.Node, opts NodeValidationOptions) field.ErrorList {
 	fldPath := field.NewPath("metadata")
 	allErrs := ValidateObjectMeta(&node.ObjectMeta, false, ValidateNodeName, fldPath)
 	allErrs = append(allErrs, ValidateNodeSpecificAnnotations(node.ObjectMeta.Annotations, fldPath.Child("annotations"))...)
@@ -4403,7 +4443,7 @@ func ValidateNode(node *core.Node) field.ErrorList {
 	// Only validate spec.
 	// All status fields are optional and can be updated later.
 	// That said, if specified, we need to ensure they are valid.
-	allErrs = append(allErrs, ValidateNodeResources(node)...)
+	allErrs = append(allErrs, ValidateNodeResources(node, opts)...)
 
 	// validate PodCIDRS only if we need to
 	if len(node.Spec.PodCIDRs) > 0 {
@@ -4443,13 +4483,33 @@ func ValidateNode(node *core.Node) field.ErrorList {
 }
 
 // ValidateNodeResources is used to make sure a node has valid capacity and allocatable values.
-func ValidateNodeResources(node *core.Node) field.ErrorList {
+func ValidateNodeResources(node *core.Node, opts NodeValidationOptions) field.ErrorList {
+	allErrs := field.ErrorList{}
+	if opts.ValidateSingleHugePageResource {
+		allErrs = append(allErrs, ValidateNodeSingleHugePageResources(node)...)
+	}
+
+	// Validate resource quantities in capacity.
+	for k, v := range node.Status.Capacity {
+		resPath := field.NewPath("status", "capacity", string(k))
+		allErrs = append(allErrs, ValidateResourceQuantityValue(string(k), v, resPath)...)
+	}
+
+	// Validate resource quantities in allocatable.
+	for k, v := range node.Status.Allocatable {
+		resPath := field.NewPath("status", "allocatable", string(k))
+		allErrs = append(allErrs, ValidateResourceQuantityValue(string(k), v, resPath)...)
+	}
+	return allErrs
+}
+
+// ValidateNodeHugePageResources is used to make sure a node has valid capacity and allocatable values for the huge page resources.
+func ValidateNodeSingleHugePageResources(node *core.Node) field.ErrorList {
 	allErrs := field.ErrorList{}
 	// Validate resource quantities in capacity.
 	hugePageSizes := sets.NewString()
 	for k, v := range node.Status.Capacity {
 		resPath := field.NewPath("status", "capacity", string(k))
-		allErrs = append(allErrs, ValidateResourceQuantityValue(string(k), v, resPath)...)
 		// track any huge page size that has a positive value
 		if helper.IsHugePageResourceName(k) && v.Value() > int64(0) {
 			hugePageSizes.Insert(string(k))
@@ -4462,7 +4522,6 @@ func ValidateNodeResources(node *core.Node) field.ErrorList {
 	hugePageSizes = sets.NewString()
 	for k, v := range node.Status.Allocatable {
 		resPath := field.NewPath("status", "allocatable", string(k))
-		allErrs = append(allErrs, ValidateResourceQuantityValue(string(k), v, resPath)...)
 		// track any huge page size that has a positive value
 		if helper.IsHugePageResourceName(k) && v.Value() > int64(0) {
 			hugePageSizes.Insert(string(k))
@@ -4475,7 +4534,7 @@ func ValidateNodeResources(node *core.Node) field.ErrorList {
 }
 
 // ValidateNodeUpdate tests to make sure a node update can be applied.  Modifies oldNode.
-func ValidateNodeUpdate(node, oldNode *core.Node) field.ErrorList {
+func ValidateNodeUpdate(node, oldNode *core.Node, opts NodeValidationOptions) field.ErrorList {
 	fldPath := field.NewPath("metadata")
 	allErrs := ValidateObjectMetaUpdate(&node.ObjectMeta, &oldNode.ObjectMeta, fldPath)
 	allErrs = append(allErrs, ValidateNodeSpecificAnnotations(node.ObjectMeta.Annotations, fldPath.Child("annotations"))...)
@@ -4486,7 +4545,7 @@ func ValidateNodeUpdate(node, oldNode *core.Node) field.ErrorList {
 	// 	allErrs = append(allErrs, field.Invalid("status", node.Status, "must be empty"))
 	// }
 
-	allErrs = append(allErrs, ValidateNodeResources(node)...)
+	allErrs = append(allErrs, ValidateNodeResources(node, opts)...)
 
 	// Validate no duplicate addresses in node status.
 	addresses := make(map[core.NodeAddress]bool)
@@ -4972,6 +5031,16 @@ func ValidateSecretUpdate(newSecret, oldSecret *core.Secret) field.ErrorList {
 	}
 
 	allErrs = append(allErrs, ValidateImmutableField(newSecret.Type, oldSecret.Type, field.NewPath("type"))...)
+	if oldSecret.Immutable != nil && *oldSecret.Immutable {
+		if newSecret.Immutable == nil || !*newSecret.Immutable {
+			allErrs = append(allErrs, field.Forbidden(field.NewPath("immutable"), "field is immutable when `immutable` is set"))
+		}
+		if !reflect.DeepEqual(newSecret.Data, oldSecret.Data) {
+			allErrs = append(allErrs, field.Forbidden(field.NewPath("data"), "field is immutable when `immutable` is set"))
+		}
+		// We don't validate StringData, as it was already converted back to Data
+		// before validation is happening.
+	}
 
 	allErrs = append(allErrs, ValidateSecret(newSecret)...)
 	return allErrs
@@ -5018,8 +5087,20 @@ func ValidateConfigMap(cfg *core.ConfigMap) field.ErrorList {
 func ValidateConfigMapUpdate(newCfg, oldCfg *core.ConfigMap) field.ErrorList {
 	allErrs := field.ErrorList{}
 	allErrs = append(allErrs, ValidateObjectMetaUpdate(&newCfg.ObjectMeta, &oldCfg.ObjectMeta, field.NewPath("metadata"))...)
-	allErrs = append(allErrs, ValidateConfigMap(newCfg)...)
 
+	if oldCfg.Immutable != nil && *oldCfg.Immutable {
+		if newCfg.Immutable == nil || !*newCfg.Immutable {
+			allErrs = append(allErrs, field.Forbidden(field.NewPath("immutable"), "field is immutable when `immutable` is set"))
+		}
+		if !reflect.DeepEqual(newCfg.Data, oldCfg.Data) {
+			allErrs = append(allErrs, field.Forbidden(field.NewPath("data"), "field is immutable when `immutable` is set"))
+		}
+		if !reflect.DeepEqual(newCfg.BinaryData, oldCfg.BinaryData) {
+			allErrs = append(allErrs, field.Forbidden(field.NewPath("binaryData"), "field is immutable when `immutable` is set"))
+		}
+	}
+
+	allErrs = append(allErrs, ValidateConfigMap(newCfg)...)
 	return allErrs
 }
 

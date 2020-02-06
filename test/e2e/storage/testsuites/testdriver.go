@@ -28,7 +28,7 @@ import (
 
 // TestDriver represents an interface for a driver to be tested in TestSuite.
 // Except for GetDriverInfo, all methods will be called at test runtime and thus
-// can use framework.Skipf, framework.Fatal, Gomega assertions, etc.
+// can use e2eskipper.Skipf, framework.Fatal, Gomega assertions, etc.
 type TestDriver interface {
 	// GetDriverInfo returns DriverInfo for the TestDriver. This must be static
 	// information.
@@ -166,9 +166,9 @@ type DriverInfo struct {
 	InTreePluginName string
 	FeatureTag       string // FeatureTag for the driver
 
-	// Max file size to be tested for this driver
+	// Maximum single file size supported by this driver
 	MaxFileSize int64
-	// The range of size supported by this driver
+	// The range of disk size supported by this driver
 	SupportedSizeRange volume.SizeRange
 	// Map of string for supported fs type
 	SupportedFsType sets.String
